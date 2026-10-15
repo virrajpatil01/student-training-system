@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: student-training-system-backend
+    env: python
+    rootDir: python_backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: SUPABASE_URL
+        value: https://zuxhwatwbwhruupujqeb.supabase.co
+      - key: SUPABASE_KEY
+        value: sb_publishable_SXBEPIeE2zKMnA0AW5EgvA_cEXWok1a
+      - key: FRONTEND_URL
+        value: https://student-training-system-274v.vercel.app
