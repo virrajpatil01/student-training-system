@@ -38,17 +38,69 @@ export function getShortCode(linkOrToken) {
 }
 
 /**
+ * Resolves the base web application URL for public links (such as /r/:shortCode).
+ * Rules:
+ * 1. Checks VITE_APP_URL environment variable first.
+ * 2. In production (deployed on Vercel or when origin is not localhost):
+ *    - Never returns localhost.
+ *    - Uses VITE_APP_URL if defined, otherwise uses window.location.origin.
+ *    - If both are missing or localhost, falls back to the hosted production domain.
+ * 3. In local development (localhost / 127.0.0.1):
+ *    - If VITE_APP_URL is explicitly set (e.g. to generate production links locally), uses it.
+ *    - Otherwise uses window.location.origin (e.g. http://localhost:5173).
+ */
+export function getBaseAppUrl() {
+  const envUrl =
+    (typeof import.meta !== "undefined" && import.meta.env?.VITE_APP_URL) ||
+    (typeof process !== "undefined" && process.env?.VITE_APP_URL);
+
+  const cleanEnvUrl = typeof envUrl === "string" ? envUrl.trim().replace(/\/+$/, "") : "";
+
+  const isBrowser = typeof window !== "undefined" && Boolean(window.location?.origin);
+  const browserOrigin = isBrowser ? window.location.origin.trim().replace(/\/+$/, "") : "";
+  const isLocalOrigin =
+    browserOrigin.includes("localhost") ||
+    browserOrigin.includes("127.0.0.1") ||
+    browserOrigin.startsWith("http://0.0.0.0");
+
+  const isProd =
+    (typeof import.meta !== "undefined" && import.meta.env?.PROD) ||
+    (typeof process !== "undefined" && process.env?.NODE_ENV === "production") ||
+    (isBrowser && !isLocalOrigin);
+
+  // In production mode or when running on a hosted public domain:
+  if (isProd) {
+    if (cleanEnvUrl && !cleanEnvUrl.includes("localhost") && !cleanEnvUrl.includes("127.0.0.1")) {
+      return cleanEnvUrl;
+    }
+    if (browserOrigin && !isLocalOrigin) {
+      return browserOrigin;
+    }
+    if (cleanEnvUrl) {
+      return cleanEnvUrl;
+    }
+    return "https://student-training-system-274v.vercel.app";
+  }
+
+  // During local development:
+  if (cleanEnvUrl) {
+    return cleanEnvUrl;
+  }
+  if (browserOrigin) {
+    return browserOrigin;
+  }
+  return "http://localhost:5173";
+}
+
+/**
  * Builds the canonical short URL for a registration link.
  * Does NOT append large encoded form configuration (?f=).
  */
 export function getShortUrl(linkOrToken) {
   const code = getShortCode(linkOrToken);
   if (!code) return "";
-  const origin =
-    typeof window !== "undefined" && window.location?.origin
-      ? window.location.origin
-      : "";
-  return origin ? `${origin}/r/${code}` : `/r/${code}`;
+  const base = getBaseAppUrl();
+  return base ? `${base}/r/${code}` : `/r/${code}`;
 }
 
 /**
