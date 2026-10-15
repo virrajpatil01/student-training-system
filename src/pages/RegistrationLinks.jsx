@@ -79,6 +79,7 @@ function RegistrationLinks() {
   const [showFormModal, setShowFormModal] = useState(false);
   const [builderFields, setBuilderFields] = useState(DEFAULT_FORM_FIELDS);
   const [builderError, setBuilderError] = useState("");
+  const [editingLink, setEditingLink] = useState(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -129,8 +130,18 @@ function RegistrationLinks() {
     };
   }, []);
 
-  function openFormBuilder() {
-    setBuilderFields(JSON.parse(JSON.stringify(formFields)));
+  function openFormBuilder(targetLink = null) {
+    if (targetLink && targetLink.id) {
+      setEditingLink(targetLink);
+      const initialFields =
+        Array.isArray(targetLink.form_config) && targetLink.form_config.length > 0
+          ? targetLink.form_config
+          : DEFAULT_FORM_FIELDS;
+      setBuilderFields(JSON.parse(JSON.stringify(initialFields)));
+    } else {
+      setEditingLink(null);
+      setBuilderFields(JSON.parse(JSON.stringify(formFields)));
+    }
     setBuilderError("");
     setShowFormModal(true);
   }
@@ -206,7 +217,7 @@ function RegistrationLinks() {
     setBuilderFields((prev) => prev.filter((field) => field.id !== id));
   }
 
-  function saveFormBuilder() {
+  async function saveFormBuilder() {
     for (const field of builderFields) {
       if (!field.name.trim()) {
         setBuilderError("All fields must have a valid label name.");
@@ -220,11 +231,34 @@ function RegistrationLinks() {
       }
     }
 
-    setFormFields(builderFields);
-    setShowFormModal(false);
-    setNotice(
-      `Registration form configured with ${builderFields.length} fields. The next link you generate will use this form!`,
-    );
+    if (editingLink) {
+      const targetToken = editingLink.token;
+      try {
+        await saveFormConfigCloud(targetToken, builderFields, supabase);
+      } catch (err) {
+        console.warn("Failed to persist updated form config to cloud:", err);
+      }
+
+      setLinks((prev) =>
+        prev.map((lnk) =>
+          lnk.id === editingLink.id
+            ? { ...lnk, form_config: builderFields }
+            : lnk,
+        ),
+      );
+
+      setShowFormModal(false);
+      setNotice(
+        `✓ Updated form configuration (${builderFields.length} fields) for link ${targetToken.slice(0, 10)}…`,
+      );
+      setEditingLink(null);
+    } else {
+      setFormFields(builderFields);
+      setShowFormModal(false);
+      setNotice(
+        `Registration form configured with ${builderFields.length} fields. The next link you generate will use this form!`,
+      );
+    }
   }
 
   function resetToDefaultForm() {
@@ -959,6 +993,14 @@ function RegistrationLinks() {
                         </button>
                         <button
                           className="table-action"
+                          onClick={() => openFormBuilder(link)}
+                          type="button"
+                          title="Customize form fields for this link"
+                        >
+                          ✏️ Edit Form
+                        </button>
+                        <button
+                          className="table-action"
                           disabled={rowBusy || status === "Expired"}
                           onClick={() => handleToggle(link)}
                           type="button"
@@ -1091,6 +1133,14 @@ function RegistrationLinks() {
                             </button>
                             <button
                               className="table-action"
+                              onClick={() => openFormBuilder(link)}
+                              type="button"
+                              title="Customize form fields for this link"
+                            >
+                              Edit Form
+                            </button>
+                            <button
+                              className="table-action"
                               disabled={rowBusy || status === "Expired"}
                               onClick={() => handleToggle(link)}
                               type="button"
@@ -1134,7 +1184,11 @@ function RegistrationLinks() {
             <div className="management-modal-heading">
               <div>
                 <p className="eyebrow">FORM CUSTOMIZATION</p>
-                <h2 id="form-builder-title">Customize Registration Form</h2>
+                <h2 id="form-builder-title">
+                  {editingLink
+                    ? `Customize Form for Link (${editingLink.token.slice(0, 10)}…)`
+                    : "Customize Registration Form"}
+                </h2>
               </div>
               <button
                 aria-label="Close dialog"

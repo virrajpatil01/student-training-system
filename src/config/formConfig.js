@@ -1,4 +1,5 @@
-// Universal form builder configuration and multi-device persistence utility
+// Universal dynamic form builder configuration and cloud persistence utility
+// Zero hardcoding - all form configurations are dynamically resolved per registration link
 
 export const DEFAULT_FORM_FIELDS = [
   { id: "name", name: "Full Name", type: "text", required: true, isDefault: true },
@@ -6,21 +7,6 @@ export const DEFAULT_FORM_FIELDS = [
 ];
 
 export const SYS_FORM_PREFIX = "SYS_FORM_CFG::";
-
-/**
- * Hardcoded registry for known tokens to ensure zero-latency, 100% reliable
- * cross-device form loading even if external network/RLS issues occur.
- */
-export const KNOWN_LINK_CONFIGS = {
-  // Token configured by admin with 5 fields in user screenshot
-  "497cc4d75244411fcececcae0b93c04c3e2b12e9232b95f6a2ed22d3f5b0ffaf": [
-    { id: "name", name: "Full Name", type: "text", required: true, isDefault: true },
-    { id: "role", name: "Role", type: "dropdown", required: true, isDefault: true },
-    { id: "phone", name: "Phone Number", type: "tel", required: true, isDefault: false },
-    { id: "email", name: "Email Address", type: "email", required: true, isDefault: false },
-    { id: "college", name: "College / University", type: "text", required: true, isDefault: false },
-  ],
-};
 
 /**
  * Checks whether a given role object or role_name string is an internal system config row.
@@ -46,7 +32,6 @@ export function encodeFormConfigUrl(fields) {
   if (!Array.isArray(fields) || fields.length === 0) return "";
   try {
     const jsonStr = JSON.stringify(fields);
-    // Base64 encoding supporting UTF-8
     const b64 = btoa(encodeURIComponent(jsonStr));
     return encodeURIComponent(b64);
   } catch (err) {
@@ -74,8 +59,8 @@ export function decodeFormConfigUrl(encodedStr) {
 }
 
 /**
- * Persists the form config to shared Supabase storage so all devices across the web can load it.
- * Uses the roles table with a system prefix which is universally readable by anon users.
+ * Persists the form config to Supabase for the specified registration link.
+ * Updates registration_links.form_config column and maintains resilient cloud fallback.
  */
 export async function saveFormConfigCloud(token, fields, supabaseClient) {
   if (!token || !Array.isArray(fields)) return;
@@ -87,70 +72,68 @@ export async function saveFormConfigCloud(token, fields, supabaseClient) {
     // ignore
   }
 
-  // 2. Persist to Supabase roles table if supabase client is available
+  // 2. Persist to Supabase if client is available
   if (supabaseClient) {
+    // 2a. Update registration_links.form_config column
+    try {
+      const { error: linkUpdateErr } = await supabaseClient
+        .from("registration_links")
+        .update({ form_config: fields })
+        .eq("token", token);
+
+      if (linkUpdateErr) {
+        console.warn("form_config column update on registration_links:", linkUpdateErr.message);
+      }
+    } catch (err) {
+      console.warn("Could not update form_config on registration_links:", err);
+    }
+
+    // 2b. Cloud-shared fallback in roles table (readable universally by all public/anon users)
     try {
       const payloadName = `${SYS_FORM_PREFIX}${token}::${JSON.stringify(fields)}`;
-      // Check if this token config already exists in roles
       const { data: existing } = await supabaseClient
         .from("roles")
         .select("id, role_name")
         .ilike("role_name", `${SYS_FORM_PREFIX}${token}::%`);
 
       if (existing && existing.length > 0) {
-        // Update existing record
         await supabaseClient
           .from("roles")
           .update({ role_name: payloadName })
           .eq("id", existing[0].id);
       } else {
-        // Insert new record
         await supabaseClient
           .from("roles")
           .insert({ role_name: payloadName });
       }
     } catch (err) {
-      console.warn("Could not persist system form config to cloud:", err);
+      console.warn("Could not persist cloud fallback form config:", err);
     }
   }
 }
 
 /**
- * Resolves form configuration across all potential sources:
- * 1. URL search params (?f= or ?cfg=)
- * 2. Database column linkData.form_config
- * 3. Pre-configured known link map
- * 4. Supabase roles table system rows (SYS_FORM_CFG::<token>::<json>)
- * 5. LocalStorage fallback
- * 6. Default standard fields
+ * Dynamically resolves form configuration for a given token across all real storage sources:
+ * 1. Database column linkData.form_config
+ * 2. Supabase roles table dynamic record (SYS_FORM_CFG::<token>::<json>)
+ * 3. URL search params (?f= or ?cfg=)
+ * 4. Local browser storage
+ *
+ * Returns null if no valid configuration is found so caller can handle errors gracefully.
  */
 export function resolveFormConfig({
   token,
   linkData,
   rolesList = [],
   searchString = typeof window !== "undefined" ? window.location.search : "",
+  allowDefaultFallback = true,
 }) {
-  // 1. URL Parameter
-  if (searchString) {
-    const params = new URLSearchParams(searchString);
-    const fromParam = params.get("f") || params.get("cfg");
-    if (fromParam) {
-      const decoded = decodeFormConfigUrl(fromParam);
-      if (decoded) return decoded;
-    }
-  }
-
-  // 2. Link Data column from database
+  // 1. Direct database column from registration_links
   if (linkData && Array.isArray(linkData.form_config) && linkData.form_config.length > 0) {
     return linkData.form_config;
   }
 
-  // 3. Known Link Configs
-  if (token && KNOWN_LINK_CONFIGS[token]) {
-    return KNOWN_LINK_CONFIGS[token];
-  }
-
-  // 4. Supabase system records in roles table
+  // 2. Supabase dynamic cloud record in roles table for this specific token
   if (token && Array.isArray(rolesList) && rolesList.length > 0) {
     const prefix = `${SYS_FORM_PREFIX}${token}::`;
     const foundRole = rolesList.find(
@@ -164,12 +147,24 @@ export function resolveFormConfig({
           return parsed;
         }
       } catch (err) {
-        console.warn("Failed to parse cloud form config:", err);
+        console.warn("Failed to parse cloud form config for token:", token, err);
       }
     }
   }
 
-  // 5. Browser LocalStorage
+  // 3. Self-contained URL parameter
+  if (searchString) {
+    const params = new URLSearchParams(searchString);
+    const fromParam = params.get("f") || params.get("cfg");
+    if (fromParam) {
+      const decoded = decodeFormConfigUrl(fromParam);
+      if (decoded && Array.isArray(decoded) && decoded.length > 0) {
+        return decoded;
+      }
+    }
+  }
+
+  // 4. Browser LocalStorage cache
   if (token && typeof localStorage !== "undefined") {
     try {
       const cached = localStorage.getItem(`reg_form_${token}`);
@@ -184,6 +179,10 @@ export function resolveFormConfig({
     }
   }
 
-  // 6. Default fallback
-  return DEFAULT_FORM_FIELDS;
+  // 5. Default fallback only if explicitly permitted (e.g., standard links)
+  if (allowDefaultFallback) {
+    return DEFAULT_FORM_FIELDS;
+  }
+
+  return null;
 }

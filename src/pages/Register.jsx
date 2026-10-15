@@ -45,6 +45,7 @@ function Register() {
   const [submitted, setSubmitted] = useState(false);
   const [assignmentResult, setAssignmentResult] = useState(null);
   const [validLink, setValidLink] = useState(false);
+  const [linkErrorState, setLinkErrorState] = useState(null);
   const [errorMessage, setErrorMessage] = useState("");
   const [showCreateCourseInline, setShowCreateCourseInline] = useState(false);
   const [newCourseName, setNewCourseName] = useState("");
@@ -59,6 +60,10 @@ function Register() {
 
     async function loadFormOptions() {
       if (!token) {
+        setLinkErrorState({
+          title: "Invalid Registration Link",
+          message: "No registration token was provided. Please check the URL.",
+        });
         setValidLink(false);
         setLoading(false);
         return;
@@ -79,14 +84,40 @@ function Register() {
       const { data: linkData, error: linkError } = linkRes;
       const { data: roleData, error: roleError } = rolesRes;
 
-      if (linkError) {
+      if (linkError || !linkData) {
         console.error("Unable to validate registration link:", linkError);
+        setLinkErrorState({
+          title: "Registration Link Not Found",
+          message: "This registration link does not exist or has been removed. Please contact your coordinator.",
+        });
         setValidLink(false);
         setLoading(false);
         return;
       }
 
-      if (!isValidLink(linkData)) {
+      if (!linkData.is_active) {
+        setLinkErrorState({
+          title: "Registration Link Inactive",
+          message: "This registration link has been deactivated by the administrator. Registrations are not currently being accepted.",
+        });
+        setValidLink(false);
+        setLoading(false);
+        return;
+      }
+
+      if (linkData.expires_at && new Date(linkData.expires_at).getTime() <= Date.now()) {
+        const expFormatted = new Intl.DateTimeFormat(undefined, {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        }).format(new Date(linkData.expires_at));
+
+        setLinkErrorState({
+          title: "Registration Link Expired",
+          message: `This registration link expired on ${expFormatted}. Intake for this session is now closed.`,
+        });
         setValidLink(false);
         setLoading(false);
         return;
@@ -94,13 +125,24 @@ function Register() {
 
       setLink(linkData);
 
-      // Resolve form configuration across cloud, URL, known link map, and local storage
+      // Resolve dynamic form configuration across database and cloud storage
       const resolvedConfig = resolveFormConfig({
         token,
         linkData,
         rolesList: roleData || [],
         searchString: typeof window !== "undefined" ? window.location.search : "",
+        allowDefaultFallback: true,
       });
+
+      if (!resolvedConfig || !Array.isArray(resolvedConfig) || resolvedConfig.length === 0) {
+        setLinkErrorState({
+          title: "Form Configuration Unavailable",
+          message: "The form configuration for this link could not be loaded. Please refresh the page.",
+        });
+        setValidLink(false);
+        setLoading(false);
+        return;
+      }
 
       setFormConfig(resolvedConfig);
 
@@ -123,6 +165,10 @@ function Register() {
     loadFormOptions().catch((error) => {
       console.error("Unable to load registration form:", error);
       if (isMounted) {
+        setLinkErrorState({
+          title: "Registration Error",
+          message: "An unexpected error occurred while loading this registration link.",
+        });
         setValidLink(false);
         setLoading(false);
       }
@@ -230,6 +276,18 @@ function Register() {
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(val)) {
           setErrorMessage(`Enter a valid email address for "${field.name}".`);
+          return;
+        }
+      }
+      if (field.type === "tel" && val) {
+        if (!/^[+0-9\s\-()]{7,25}$/.test(val)) {
+          setErrorMessage(`Enter a valid phone number for "${field.name}".`);
+          return;
+        }
+      }
+      if (field.type === "number" && val) {
+        if (Number.isNaN(Number(val))) {
+          setErrorMessage(`Enter a valid number for "${field.name}".`);
           return;
         }
       }
@@ -373,15 +431,15 @@ function Register() {
     );
   }
 
-  if (!validLink) {
+  if (!validLink || linkErrorState) {
     return (
       <main className="student-registration-page">
         <section className="public-registration-card invalid-link-card">
           <div className="public-brand-mark" aria-hidden="true">
             <RegistrationMark />
           </div>
-          <h1>Registration unavailable</h1>
-          <p>Registration link is invalid or expired.</p>
+          <h1>{linkErrorState?.title || "Registration unavailable"}</h1>
+          <p>{linkErrorState?.message || "Registration link is invalid or expired."}</p>
         </section>
       </main>
     );

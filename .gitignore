@@ -40,3 +40,4 @@ lerna-debug.log*
 *.njsproj
 *.sln
 *.sw?
+supabase/.temp/
