@@ -351,41 +351,60 @@ function Register() {
     console.log("Custom Values:", customValues);
     console.log("================================================");
 
-    let studentInsertResult = await supabase
-      .from("students")
-      .insert(payloadWithExtra)
-      .select("id, role_id")
-      .single();
+    let insertedStudent = null;
+    let insertError = null;
 
-    let insertError = studentInsertResult.error;
-    let insertedStudent = studentInsertResult.data;
+    // 1. Try secure PostgreSQL RPC function first (handles token validation, expiry, active check, duplicates, and avoids RETURNING RLS SELECT issue)
+    const { data: rpcResult, error: rpcError } = await supabase.rpc("register_student", {
+      p_token: link.token,
+      p_name: normalizedName,
+      p_role_id: roleId,
+      p_extra_fields: customValues,
+    });
 
-    // Fallback if extra_fields column does not exist yet (PGRST204 or 42703)
-    if (insertError && isMissingColumnError(insertError)) {
-      console.warn("extra_fields column not present in students table, submitting with formatted name fallback.");
-      // Build composite name including custom fields so admin doesn't lose submitted data
-      const extraEntries = Object.entries(customValues).filter(([_, v]) => v && String(v).trim());
-      let compositeName = normalizedName;
-      if (extraEntries.length > 0) {
-        const fieldMap = new Map(formConfig.map((f) => [f.id, f.name]));
-        const formattedDetails = extraEntries
-          .map(([k, v]) => `${fieldMap.get(k) || k}: ${v.trim()}`)
-          .join(" | ");
-        compositeName = `${normalizedName} (${formattedDetails})`;
+    if (!rpcError && rpcResult) {
+      if (rpcResult.success) {
+        insertedStudent = { id: rpcResult.student_id, role_id: rpcResult.role_id };
+      } else {
+        insertError = {
+          message: rpcResult.error || "Registration rejected.",
+          code: rpcResult.code || "REGISTRATION_REJECTED",
+        };
       }
+    } else {
+      // 2. Fallback to direct insert if RPC is not deployed yet or encountered an error
+      // IMPORTANT: Do NOT chain .select() on public/anon insert to avoid Code 42501 (SELECT policy restricted to authenticated)
+      console.warn("RPC register_student unavailable, attempting direct insert fallback:", rpcError?.message);
 
-      const defaultPayload = {
-        name: compositeName,
+      const payloadWithExtra = {
+        name: normalizedName,
         role_id: roleId,
         registration_link_id: link.id,
+        extra_fields: customValues,
       };
-      const fallbackResult = await supabase
-        .from("students")
-        .insert(defaultPayload)
-        .select("id, role_id")
-        .single();
-      insertError = fallbackResult.error;
-      insertedStudent = fallbackResult.data;
+
+      let directRes = await supabase.from("students").insert(payloadWithExtra);
+
+      if (directRes.error && isMissingColumnError(directRes.error)) {
+        console.warn("extra_fields column not present in students table, submitting with formatted name fallback.");
+        const extraEntries = Object.entries(customValues).filter(([_, v]) => v && String(v).trim());
+        let compositeName = normalizedName;
+        if (extraEntries.length > 0) {
+          const fieldMap = new Map(formConfig.map((f) => [f.id, f.name]));
+          const formattedDetails = extraEntries
+            .map(([k, v]) => `${fieldMap.get(k) || k}: ${v.trim()}`)
+            .join(" | ");
+          compositeName = `${normalizedName} (${formattedDetails})`;
+        }
+
+        directRes = await supabase.from("students").insert({
+          name: compositeName,
+          role_id: roleId,
+          registration_link_id: link.id,
+        });
+      }
+
+      insertError = directRes.error;
     }
 
     // Automatic Course-wise Batch Allocation

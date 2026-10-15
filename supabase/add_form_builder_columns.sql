@@ -36,15 +36,25 @@ TO authenticated
 USING (true)
 WITH CHECK (true);
 
--- 4. Ensure Row-Level Security (RLS) allows public to insert student registrations with extra_fields
+-- 4. Ensure Row-Level Security (RLS) allows public to insert student registrations for active links
 ALTER TABLE public.students ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Allow public student registration" ON public.students;
-CREATE POLICY "Allow public student registration"
+DROP POLICY IF EXISTS "Allow public insert with valid registration link" ON public.students;
+
+CREATE POLICY "Allow public insert with valid registration link"
 ON public.students
 FOR INSERT
 TO public
-WITH CHECK (true);
+WITH CHECK (
+  registration_link_id IS NOT NULL
+  AND EXISTS (
+    SELECT 1 FROM public.registration_links rl
+    WHERE rl.id = registration_link_id
+      AND rl.is_active = true
+      AND (rl.expires_at IS NULL OR rl.expires_at > now())
+  )
+);
 
 -- 5. Backfill existing active registration link with its 5 customized fields
 UPDATE public.registration_links
