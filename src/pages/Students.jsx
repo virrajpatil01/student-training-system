@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 import { supabase } from "../supabase";
 import { fetchAllRows } from "../utils/studentMetrics";
 import { getApiUrl } from "../config/api";
+import { filterSystemRoles } from "../config/formConfig";
 
 function formatDate(value) {
   if (!value) return "—";
@@ -18,23 +19,43 @@ function formatDate(value) {
 }
 
 function extractContact(student) {
-  const email =
+  let email =
     student.email ||
     student.extra_fields?.email ||
     student.extra_fields?.Email ||
     student.extra_fields?.["email_address"] ||
-    "—";
+    "";
 
-  const phone =
+  let phone =
     student.phone ||
     student.extra_fields?.phone ||
     student.extra_fields?.Phone ||
     student.extra_fields?.contact ||
     student.extra_fields?.["phone_number"] ||
     student.extra_fields?.mobile ||
-    "—";
+    "";
 
-  return { email, phone };
+  let cleanName = student.name || "Unnamed Student";
+
+  // If email or phone missing, check if formatted into name string
+  if ((!email || !phone) && typeof student.name === "string" && student.name.includes("(")) {
+    const match = student.name.match(/^(.*?)\s*\((.*?)\)$/);
+    if (match) {
+      cleanName = match[1].trim();
+      const details = match[2];
+      const parts = details.split("|").map((p) => p.trim());
+      for (const part of parts) {
+        const lower = part.toLowerCase();
+        if (!email && (lower.includes("email") || lower.includes("@"))) {
+          email = part.replace(/^email\s*(address)?\s*:\s*/i, "").trim();
+        } else if (!phone && (lower.includes("phone") || lower.includes("contact") || lower.includes("mobile") || /^\+?[\d\s-]{7,15}$/.test(part))) {
+          phone = part.replace(/^phone\s*(number)?\s*:\s*/i, "").trim();
+        }
+      }
+    }
+  }
+
+  return { email: email || "—", phone: phone || "—", cleanName };
 }
 
 function Students() {
@@ -110,7 +131,7 @@ function Students() {
 
       if (rolesRes.error) throw rolesRes.error;
 
-      const rolesList = rolesRes.data || [];
+      const rolesList = filterSystemRoles(rolesRes.data || []);
       const batchesList = batchesRes.data || [];
 
       // Map batch assignments
@@ -131,7 +152,7 @@ function Students() {
       const rolesMap = new Map(rolesList.map((r) => [String(r.id), r.role_name]));
 
       const enrichedStudents = rawStudents.map((s) => {
-        const { email, phone } = extractContact(s);
+        const { email, phone, cleanName } = extractContact(s);
         const roleName = Array.isArray(s.role)
           ? s.role[0]?.role_name || rolesMap.get(String(s.role_id)) || "—"
           : s?.role?.role_name || rolesMap.get(String(s.role_id)) || "—";
@@ -141,7 +162,7 @@ function Students() {
 
         return {
           id: s.id,
-          name: s.name || "Unnamed Student",
+          name: cleanName || s.name || "Unnamed Student",
           email,
           phone,
           roleId: s.role_id,
@@ -598,8 +619,9 @@ function Students() {
       }
 
       const { data: updatedRoles } = await supabase.from("roles").select("id, role_name");
-      const newMap = new Map((updatedRoles || []).map((r) => [r.role_name.toLowerCase(), r]));
-      setRoles(updatedRoles || []);
+      const cleanUpdated = filterSystemRoles(updatedRoles || []);
+      const newMap = new Map(cleanUpdated.map((r) => [r.role_name.toLowerCase(), r]));
+      setRoles(cleanUpdated);
 
       setBulkParsedData((prev) =>
         prev.map((r) => {

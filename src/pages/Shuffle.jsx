@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 import { supabase } from "../supabase";
 import { fetchAllRows } from "../utils/studentMetrics";
 import { BACKEND_URL as API_BASE_URL } from "../config/api";
+import { filterSystemRoles } from "../config/formConfig";
 
 function Shuffle() {
   const location = useLocation();
@@ -95,9 +96,10 @@ function Shuffle() {
         .select("id, role_name")
         .order("role_name", { ascending: true });
 
-      if (rolesData && rolesData.length > 0) {
-        setCourses(rolesData);
-        setSelectedCourseShuffleId((prev) => prev || rolesData[0].id);
+      const cleanRoles = filterSystemRoles(rolesData || []);
+      if (cleanRoles.length > 0) {
+        setCourses(cleanRoles);
+        setSelectedCourseShuffleId((prev) => prev || cleanRoles[0].id);
       }
     } catch (err) {
       console.error("Unable to load initial shuffle data:", err?.message || err);

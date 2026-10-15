@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import * as XLSX from "xlsx";
 import { supabase } from "../supabase";
 import { fetchAllRows, computeMetrics } from "../utils/studentMetrics";
+import { filterSystemRoles } from "../config/formConfig";
 
 function formatDate(value) {
   if (!value) return "—";
@@ -86,16 +87,17 @@ function Trainers() {
         ),
       ]);
 
+      const cleanCourses = filterSystemRoles(coursesRes);
       const metrics = computeMetrics({
         students: studentsRes,
         batches: batchesRes,
         assignments: assignmentsRes,
         trainers: trainersRes,
-        roles: coursesRes,
+        roles: cleanCourses,
       });
 
       setTrainers(metrics.enrichedTrainers);
-      setCourses(coursesRes);
+      setCourses(cleanCourses);
     } catch (error) {
       console.error("Unable to load trainers data:", error?.message || error);
       setTrainers([]);

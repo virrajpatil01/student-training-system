@@ -2,6 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth";
 import { supabase } from "../supabase";
 import { getApiUrl } from "../config/api";
+import {
+  DEFAULT_FORM_FIELDS,
+  SYS_FORM_PREFIX,
+  encodeFormConfigUrl,
+  resolveFormConfig,
+  saveFormConfigCloud,
+} from "../config/formConfig";
 
 function createSecureToken() {
   const bytes = new Uint8Array(32);
@@ -50,11 +57,6 @@ function isMissingColumnError(error) {
   );
 }
 
-const DEFAULT_FORM_FIELDS = [
-  { id: "name", name: "Full Name", type: "text", required: true, isDefault: true },
-  { id: "role", name: "Role", type: "dropdown", required: true, isDefault: true },
-];
-
 function RegistrationLinks() {
   const { session } = useAuth();
   const [links, setLinks] = useState([]);
@@ -82,27 +84,31 @@ function RegistrationLinks() {
     let isMounted = true;
 
     async function fetchLinks() {
-      const { data, error } = await supabase
-        .from("registration_links")
-        .select("*")
-        .order("created_at", { ascending: false });
+      const [linksRes, rolesRes] = await Promise.all([
+        supabase
+          .from("registration_links")
+          .select("*")
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("roles")
+          .select("id, role_name")
+          .ilike("role_name", `${SYS_FORM_PREFIX}%`),
+      ]);
 
       if (!isMounted) return;
-      if (error) {
-        console.error("Unable to load registration links:", error);
+      if (linksRes.error) {
+        console.error("Unable to load registration links:", linksRes.error);
         setErrorMessage(
           "Registration links could not be loaded. Check table access and Supabase policies.",
         );
       } else {
-        const hydrated = (data || []).map((lnk) => {
-          if (!lnk.form_config) {
-            try {
-              const cached = localStorage.getItem(`reg_form_${lnk.token}`);
-              if (cached) lnk.form_config = JSON.parse(cached);
-            } catch {
-              // ignore
-            }
-          }
+        const rolesList = rolesRes.data || [];
+        const hydrated = (linksRes.data || []).map((lnk) => {
+          lnk.form_config = resolveFormConfig({
+            token: lnk.token,
+            linkData: lnk,
+            rolesList,
+          });
           return lnk;
         });
         setLinks(hydrated);
@@ -297,7 +303,7 @@ function RegistrationLinks() {
     }
 
     try {
-      localStorage.setItem(`reg_form_${result.data.token}`, JSON.stringify(formFields));
+      await saveFormConfigCloud(result.data.token, formFields, supabase);
     } catch {
       // ignore
     }
@@ -305,16 +311,31 @@ function RegistrationLinks() {
     const createdRecord = { ...result.data, form_config: formFields };
     setLinks((currentLinks) => [createdRecord, ...currentLinks]);
     setExpiryInput("");
-    const newUrl = `${window.location.origin}/register/${result.data.token}`;
+    const newUrl = getPublicUrl(createdRecord);
     setNotice(
       `Registration link generated with ${formFields.length} form fields: ${newUrl}`,
     );
   }
 
-  async function handleCopy(token) {
+  function getPublicUrl(linkOrToken, customFields) {
+    const token = typeof linkOrToken === "string" ? linkOrToken : linkOrToken?.token;
+    const fields =
+      customFields ||
+      (typeof linkOrToken === "object" ? linkOrToken?.form_config : null) ||
+      formFields;
+    let url = `${window.location.origin}/register/${token}`;
+    if (Array.isArray(fields) && fields.length > 2) {
+      const encoded = encodeFormConfigUrl(fields);
+      if (encoded) url += `?f=${encoded}`;
+    }
+    return url;
+  }
+
+  async function handleCopy(linkOrToken, customFields) {
     setErrorMessage("");
     setNotice("");
-    const url = `${window.location.origin}/register/${token}`;
+    const token = typeof linkOrToken === "string" ? linkOrToken : linkOrToken?.token;
+    const url = getPublicUrl(linkOrToken, customFields);
 
     try {
       await navigator.clipboard.writeText(url);
@@ -329,8 +350,8 @@ function RegistrationLinks() {
     }
   }
 
-  function handleWhatsAppShare(token) {
-    const url = `${window.location.origin}/register/${token}`;
+  function handleWhatsAppShare(linkOrToken, customFields) {
+    const url = getPublicUrl(linkOrToken, customFields);
     const message = `Student Registration Form\n${url}`;
     const shareUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
     window.open(shareUrl, "_blank", "noopener,noreferrer");
@@ -852,7 +873,7 @@ function RegistrationLinks() {
             <div className="registration-links-grid">
               {filteredLinks.map((link) => {
                 const status = getStatus(link);
-                const publicUrl = `${window.location.origin}/register/${link.token}`;
+                const publicUrl = getPublicUrl(link);
                 const rowBusy = busyId === link.id;
                 const isCopied = copiedToken === link.token;
                 const fieldList = Array.isArray(link.form_config) ? link.form_config : DEFAULT_FORM_FIELDS;
@@ -887,7 +908,7 @@ function RegistrationLinks() {
                               borderRadius: "6px",
                               background: isCopied ? "#16a34a" : undefined,
                             }}
-                            onClick={() => handleCopy(link.token)}
+                            onClick={() => handleCopy(link)}
                           >
                             {isCopied ? "✓ Copied!" : "Copy"}
                           </button>
@@ -931,7 +952,7 @@ function RegistrationLinks() {
                       <div className="reg-link-actions-row" style={{ marginTop: "12px" }}>
                         <button
                           className="table-action"
-                          onClick={() => handleWhatsAppShare(link.token)}
+                          onClick={() => handleWhatsAppShare(link)}
                           type="button"
                         >
                           📱 WhatsApp
@@ -1001,7 +1022,7 @@ function RegistrationLinks() {
                 ) : (
                   filteredLinks.map((link) => {
                     const status = getStatus(link);
-                    const publicUrl = `${window.location.origin}/register/${link.token}`;
+                    const publicUrl = getPublicUrl(link);
                     const rowBusy = busyId === link.id;
                     const isCopied = copiedToken === link.token;
                     const fieldCount = Array.isArray(link.form_config)
@@ -1024,7 +1045,7 @@ function RegistrationLinks() {
                             <button
                               type="button"
                               className="schedule-copy-btn"
-                              onClick={() => handleCopy(link.token)}
+                              onClick={() => handleCopy(link)}
                               title={isCopied ? "Copied!" : "Copy URL"}
                             >
                               {isCopied ? "✓" : "📋"}
@@ -1056,14 +1077,14 @@ function RegistrationLinks() {
                             </button>
                             <button
                               className="table-action"
-                              onClick={() => handleCopy(link.token)}
+                              onClick={() => handleCopy(link)}
                               type="button"
                             >
                               {isCopied ? "Copied!" : "Copy"}
                             </button>
                             <button
                               className="table-action"
-                              onClick={() => handleWhatsAppShare(link.token)}
+                              onClick={() => handleWhatsAppShare(link)}
                               type="button"
                             >
                               WhatsApp

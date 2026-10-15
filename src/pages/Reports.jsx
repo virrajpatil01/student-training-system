@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import KPICard from "../components/KPICard";
 import { supabase } from "../supabase";
 import { fetchAllRows } from "../utils/studentMetrics";
+import { filterSystemRoles } from "../config/formConfig";
 
 function formatDate(value) {
   if (!value) return "—";
@@ -124,7 +125,7 @@ function Reports() {
       if (schedulesRes.error) throw schedulesRes.error;
 
       setStudents(studentsList || []);
-      setRoles(rolesRes.data || []);
+      setRoles(filterSystemRoles(rolesRes.data || []));
       setTrainers(trainersRes.data || []);
       setBatches(batchesRes.data || []);
       setBatchStudents(batchStudentsList || []);

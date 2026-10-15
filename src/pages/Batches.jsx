@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "../supabase";
 import { computeMetrics, fetchAllRows } from "../utils/studentMetrics";
 import { getApiUrl, BACKEND_URL } from "../config/api";
+import { filterSystemRoles } from "../config/formConfig";
 
 function formatDate(value) {
   if (!value) return "—";
@@ -146,7 +147,7 @@ async function fetchBatchesData() {
   if (rolesRes.error) throw rolesRes.error;
   if (trainersRes.error) throw trainersRes.error;
 
-  const rolesList = rolesRes.data || [];
+  const rolesList = filterSystemRoles(rolesRes.data || []);
   const trainersList = trainersRes.data || [];
 
   const rolesMap = new Map(rolesList.map((r) => [String(r.id), r.role_name]));

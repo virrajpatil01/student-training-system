@@ -1,4 +1,5 @@
 import { supabase } from "../supabase.js";
+import { filterSystemRoles } from "../config/formConfig.js";
 
 /**
  * Universal pagination helper to fetch all rows beyond PostgREST's 1000-row limit.
@@ -238,11 +239,12 @@ export async function fetchSystemMetrics() {
     ),
   ]);
 
-  const metrics = computeMetrics({ students, batches, assignments, trainers, roles });
+  const cleanRoles = filterSystemRoles(roles);
+  const metrics = computeMetrics({ students, batches, assignments, trainers, roles: cleanRoles });
 
   return {
     students,
-    roles,
+    roles: cleanRoles,
     trainers,
     batches,
     assignments,

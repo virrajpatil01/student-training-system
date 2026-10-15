@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../supabase";
+import { filterSystemRoles } from "../config/formConfig";
 
 function formatDate(value) {
   if (!value) return "—";
@@ -86,6 +87,8 @@ function Roles() {
         if (fallbackRes.error) throw fallbackRes.error;
         roleRows = fallbackRes.data || [];
       }
+
+      roleRows = filterSystemRoles(roleRows);
 
       const [studentsRes, batchesRes] = await Promise.all([
         supabase.from("students").select("id, name, role_id, created_at").order("created_at", { ascending: false }),
@@ -271,7 +274,8 @@ function Roles() {
 
       if (checkError) throw checkError;
 
-      const duplicate = (existingRoles || []).some(
+      const cleanExisting = filterSystemRoles(existingRoles || []);
+      const duplicate = cleanExisting.some(
         (role) =>
           String(role.id) !== String(dialogRole?.id) &&
           role.role_name.trim().toLowerCase() === normalizedName.toLowerCase(),

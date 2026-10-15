@@ -2,6 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { supabase } from "../supabase";
 import { getApiUrl } from "../config/api";
+import {
+  DEFAULT_FORM_FIELDS,
+  filterSystemRoles,
+  resolveFormConfig,
+} from "../config/formConfig";
 
 function isValidLink(link) {
   return Boolean(
@@ -25,11 +30,6 @@ function isMissingColumnError(error) {
         error.message.toLowerCase().includes("does not exist")))
   );
 }
-
-const DEFAULT_FORM_FIELDS = [
-  { id: "name", name: "Full Name", type: "text", required: true, isDefault: true },
-  { id: "role", name: "Role", type: "dropdown", required: true, isDefault: true },
-];
 
 function Register() {
   const { token } = useParams();
@@ -64,13 +64,20 @@ function Register() {
         return;
       }
 
-      const { data: linkData, error: linkError } = await supabase
-        .from("registration_links")
-        .select("*")
-        .eq("token", token)
-        .maybeSingle();
+      // Fetch registration link and roles in parallel
+      const [linkRes, rolesRes] = await Promise.all([
+        supabase
+          .from("registration_links")
+          .select("*")
+          .eq("token", token)
+          .maybeSingle(),
+        supabase.from("roles").select("*").limit(500),
+      ]);
 
       if (!isMounted) return;
+
+      const { data: linkData, error: linkError } = linkRes;
+      const { data: roleData, error: roleError } = rolesRes;
 
       if (linkError) {
         console.error("Unable to validate registration link:", linkError);
@@ -87,33 +94,15 @@ function Register() {
 
       setLink(linkData);
 
-      let loadedConfig = null;
-      if (Array.isArray(linkData.form_config) && linkData.form_config.length > 0) {
-        loadedConfig = linkData.form_config;
-      } else {
-        try {
-          const cached = localStorage.getItem(`reg_form_${token}`);
-          if (cached) {
-            const parsed = JSON.parse(cached);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              loadedConfig = parsed;
-            }
-          }
-        } catch {
-          // ignore
-        }
-      }
+      // Resolve form configuration across cloud, URL, known link map, and local storage
+      const resolvedConfig = resolveFormConfig({
+        token,
+        linkData,
+        rolesList: roleData || [],
+        searchString: typeof window !== "undefined" ? window.location.search : "",
+      });
 
-      if (loadedConfig) {
-        setFormConfig(loadedConfig);
-      }
-
-      const { data: roleData, error: roleError } = await supabase
-        .from("roles")
-        .select("*")
-        .limit(500);
-
-      if (!isMounted) return;
+      setFormConfig(resolvedConfig);
 
       if (roleError) {
         console.error("Unable to load registration roles:", roleError);
@@ -121,12 +110,12 @@ function Register() {
           "Roles could not be loaded. Please contact the administrator.",
         );
       } else {
-        setRoles(
-          (roleData || []).filter(
-            (role) => role.id != null && getRoleLabel(role),
-          ),
+        const cleanRoles = filterSystemRoles(roleData || []).filter(
+          (role) => role.id != null && getRoleLabel(role),
         );
+        setRoles(cleanRoles);
       }
+
       setValidLink(true);
       setLoading(false);
     }
@@ -297,9 +286,20 @@ function Register() {
 
     // Fallback if extra_fields column does not exist yet (PGRST204 or 42703)
     if (insertError && isMissingColumnError(insertError)) {
-      console.warn("extra_fields column not present in students table, submitting default columns.");
+      console.warn("extra_fields column not present in students table, submitting with formatted name fallback.");
+      // Build composite name including custom fields so admin doesn't lose submitted data
+      const extraEntries = Object.entries(customValues).filter(([_, v]) => v && String(v).trim());
+      let compositeName = normalizedName;
+      if (extraEntries.length > 0) {
+        const fieldMap = new Map(formConfig.map((f) => [f.id, f.name]));
+        const formattedDetails = extraEntries
+          .map(([k, v]) => `${fieldMap.get(k) || k}: ${v.trim()}`)
+          .join(" | ");
+        compositeName = `${normalizedName} (${formattedDetails})`;
+      }
+
       const defaultPayload = {
-        name: normalizedName,
+        name: compositeName,
         role_id: roleId,
         registration_link_id: link.id,
       };
