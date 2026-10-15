@@ -4,6 +4,9 @@ import re
 import random
 import logging
 import threading
+import base64
+import json
+import time
 from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
 from dotenv import load_dotenv
@@ -28,6 +31,23 @@ def _get_course_lock(role_id: str) -> threading.Lock:
         if rid not in _course_assignment_locks:
             _course_assignment_locks[rid] = threading.Lock()
         return _course_assignment_locks[rid]
+
+def _is_jwt_valid(token: Optional[str]) -> bool:
+    """Checks whether a Supabase JWT token is valid and unexpired."""
+    if not token or len(token) < 20:
+        return False
+    try:
+        parts = token.replace("Bearer ", "").strip().split(".")
+        if len(parts) != 3:
+            return False
+        padded = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+        exp = payload.get("exp")
+        if exp and exp > (time.time() + 30):
+            return True
+        return False
+    except Exception:
+        return False
 
 # Load environment variables from python_backend/.env or root .env
 backend_env_path = Path(__file__).parent / ".env"
@@ -94,13 +114,13 @@ def _get_system_auth_token() -> Optional[str]:
         token_path = Path(__file__).parent / "active_token.txt"
         rt_path = Path(__file__).parent / "system_refresh_token.txt"
 
-        if _system_access_token:
+        if _system_access_token and _is_jwt_valid(_system_access_token):
             return _system_access_token
 
         if token_path.exists():
             try:
                 saved_token = token_path.read_text().strip()
-                if saved_token:
+                if saved_token and _is_jwt_valid(saved_token):
                     _system_access_token = saved_token
                     return saved_token
             except Exception:
@@ -168,7 +188,7 @@ def get_supabase_client(auth_token: Optional[str] = None) -> Client:
     (like auto batch assignment on student registration) succeed under Supabase RLS.
     """
     client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    token_to_use = auth_token or _get_system_auth_token()
+    token_to_use = auth_token if (auth_token and _is_jwt_valid(auth_token)) else _get_system_auth_token()
     if token_to_use:
         clean_token = token_to_use.replace("Bearer ", "").strip()
         if clean_token:
@@ -747,6 +767,8 @@ def auto_create_role_wise_batches(
     for role in roles:
         rid = str(role["id"])
         role_name = (role.get("role_name") or f"Role-{rid[:8]}").strip()
+        if role_name.startswith("SYS_") or role_name.startswith("__SYS"):
+            continue
 
         role_students = [s for s in students if str(s.get("role_id") or "") == rid]
         total_role_students = len(role_students)

@@ -27,8 +27,11 @@ for f in files:
                         try:
                             res = c.auth.refresh_session(rt_m.group(1))
                             print('REFRESH SUCCESS! Fresh access token:', res.session.access_token[:20])
-                            open('python_backend/active_token.txt', 'w').write(res.session.access_token)
-                            open('python_backend/system_refresh_token.txt', 'w').write(res.session.refresh_token)
+                            from pathlib import Path
+                            token_p = Path(__file__).parent / 'active_token.txt'
+                            rt_p = Path(__file__).parent / 'system_refresh_token.txt'
+                            token_p.write_text(res.session.access_token)
+                            rt_p.write_text(res.session.refresh_token)
                             found_json = True
                             break
                         except Exception as e:
@@ -55,8 +58,9 @@ if not found_json:
                         try:
                             res = c.auth.refresh_session(rt_m.group(1))
                             print('REFRESH SUCCESS from secondary search! Token:', res.session.access_token[:20])
-                            open('python_backend/active_token.txt', 'w').write(res.session.access_token)
-                            open('python_backend/system_refresh_token.txt', 'w').write(res.session.refresh_token)
+                            from pathlib import Path
+                            (Path(__file__).parent / 'active_token.txt').write_text(res.session.access_token)
+                            (Path(__file__).parent / 'system_refresh_token.txt').write_text(res.session.refresh_token)
                             found_json = True
                             break
                         except Exception as e:
