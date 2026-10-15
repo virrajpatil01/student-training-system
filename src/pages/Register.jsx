@@ -32,7 +32,8 @@ function isMissingColumnError(error) {
 }
 
 function Register() {
-  const { token } = useParams();
+  const { token, shortCode } = useParams();
+  const linkIdentifier = (shortCode || token || "").trim();
   const submissionLock = useRef(false);
   const [link, setLink] = useState(null);
   const [formConfig, setFormConfig] = useState(DEFAULT_FORM_FIELDS);
@@ -59,36 +60,53 @@ function Register() {
     let isMounted = true;
 
     async function loadFormOptions() {
-      if (!token) {
+      if (!linkIdentifier) {
         setLinkErrorState({
           title: "Invalid Registration Link",
-          message: "No registration token was provided. Please check the URL.",
+          message: "No registration token or short code was provided. Please check the URL.",
         });
         setValidLink(false);
         setLoading(false);
         return;
       }
 
-      // Fetch registration link and roles in parallel
+      // Fetch registration link (try exact match first, then prefix match for short codes) and roles in parallel
       const [linkRes, rolesRes] = await Promise.all([
         supabase
           .from("registration_links")
           .select("*")
-          .eq("token", token)
+          .eq("token", linkIdentifier)
           .maybeSingle(),
         supabase.from("roles").select("*").limit(500),
       ]);
 
       if (!isMounted) return;
 
-      const { data: linkData, error: linkError } = linkRes;
+      let linkData = linkRes.data;
+      let linkError = linkRes.error;
+
+      // If exact match not found and identifier length >= 6, resolve via prefix match (e.g. short code for 64-char token)
+      if (!linkData && !linkError && linkIdentifier.length >= 6) {
+        const { data: prefixMatches, error: prefixErr } = await supabase
+          .from("registration_links")
+          .select("*")
+          .ilike("token", `${linkIdentifier}%`)
+          .limit(2);
+
+        if (!prefixErr && prefixMatches && prefixMatches.length > 0) {
+          linkData = prefixMatches[0];
+        } else if (prefixErr) {
+          linkError = prefixErr;
+        }
+      }
+
       const { data: roleData, error: roleError } = rolesRes;
 
       if (linkError || !linkData) {
         console.error("Unable to validate registration link:", linkError);
         setLinkErrorState({
           title: "Registration Link Not Found",
-          message: "This registration link does not exist or has been removed. Please contact your coordinator.",
+          message: "This registration link does not exist or has been removed. Please check the link or contact your coordinator.",
         });
         setValidLink(false);
         setLoading(false);
@@ -127,7 +145,7 @@ function Register() {
 
       // Resolve dynamic form configuration across database and cloud storage
       const resolvedConfig = resolveFormConfig({
-        token,
+        token: linkData.token,
         linkData,
         rolesList: roleData || [],
         searchString: typeof window !== "undefined" ? window.location.search : "",
@@ -177,7 +195,7 @@ function Register() {
     return () => {
       isMounted = false;
     };
-  }, [token]);
+  }, [token, shortCode]);
 
   function handleCustomChange(fieldId, value) {
     setCustomValues((prev) => ({
@@ -303,9 +321,9 @@ function Register() {
 
     const { data: currentLink, error: validationError } = await supabase
       .from("registration_links")
-      .select("id, is_active, expires_at")
+      .select("id, is_active, expires_at, token")
       .eq("id", link.id)
-      .eq("token", token)
+      .eq("token", link.token)
       .maybeSingle();
 
     if (validationError || !isValidLink(currentLink)) {
@@ -327,7 +345,7 @@ function Register() {
 
     console.log("========== STUDENT REGISTRATION SUBMIT ==========");
     console.log("Submitting payload:", payloadWithExtra);
-    console.log("Token:", token);
+    console.log("Token:", link.token);
     console.log("Link ID:", link?.id);
     console.log("Role ID:", roleId);
     console.log("Custom Values:", customValues);

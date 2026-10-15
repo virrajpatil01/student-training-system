@@ -15,6 +15,9 @@ ADD COLUMN IF NOT EXISTS form_config JSONB DEFAULT '[
 ALTER TABLE public.students
 ADD COLUMN IF NOT EXISTS extra_fields JSONB DEFAULT '{}'::jsonb;
 
+-- 2b. Add index on token for fast exact and prefix lookups (/r/:shortCode)
+CREATE INDEX IF NOT EXISTS idx_registration_links_token ON public.registration_links (token);
+
 -- 3. Ensure Row-Level Security (RLS) allows public to read form_config on active links
 ALTER TABLE public.registration_links ENABLE ROW LEVEL SECURITY;
 

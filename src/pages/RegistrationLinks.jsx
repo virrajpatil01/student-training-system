@@ -5,17 +5,16 @@ import { getApiUrl } from "../config/api";
 import {
   DEFAULT_FORM_FIELDS,
   SYS_FORM_PREFIX,
+  createShortToken,
+  getShortCode,
+  getShortUrl,
   encodeFormConfigUrl,
   resolveFormConfig,
   saveFormConfigCloud,
 } from "../config/formConfig";
 
 function createSecureToken() {
-  const bytes = new Uint8Array(32);
-  window.crypto.getRandomValues(bytes);
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
-    "",
-  );
+  return createShortToken(8);
 }
 
 function formatDate(value, emptyLabel = "—") {
@@ -249,7 +248,7 @@ function RegistrationLinks() {
 
       setShowFormModal(false);
       setNotice(
-        `✓ Updated form configuration (${builderFields.length} fields) for link ${targetToken.slice(0, 10)}…`,
+        `✓ Updated form configuration (${builderFields.length} fields) for link /r/${getShortCode(targetToken)}`,
       );
       setEditingLink(null);
     } else {
@@ -351,31 +350,21 @@ function RegistrationLinks() {
     );
   }
 
-  function getPublicUrl(linkOrToken, customFields) {
-    const token = typeof linkOrToken === "string" ? linkOrToken : linkOrToken?.token;
-    const fields =
-      customFields ||
-      (typeof linkOrToken === "object" ? linkOrToken?.form_config : null) ||
-      formFields;
-    let url = `${window.location.origin}/register/${token}`;
-    if (Array.isArray(fields) && fields.length > 2) {
-      const encoded = encodeFormConfigUrl(fields);
-      if (encoded) url += `?f=${encoded}`;
-    }
-    return url;
+  function getPublicUrl(linkOrToken) {
+    return getShortUrl(linkOrToken);
   }
 
-  async function handleCopy(linkOrToken, customFields) {
+  async function handleCopy(linkOrToken) {
     setErrorMessage("");
     setNotice("");
     const token = typeof linkOrToken === "string" ? linkOrToken : linkOrToken?.token;
-    const url = getPublicUrl(linkOrToken, customFields);
+    const url = getPublicUrl(linkOrToken);
 
     try {
       await navigator.clipboard.writeText(url);
       setCopiedToken(token);
       setTimeout(() => setCopiedToken(null), 2500);
-      setNotice("Registration link copied to clipboard!");
+      setNotice("Short registration link copied to clipboard!");
     } catch (error) {
       console.error("Unable to copy registration link:", error);
       setErrorMessage(
@@ -384,8 +373,8 @@ function RegistrationLinks() {
     }
   }
 
-  function handleWhatsAppShare(linkOrToken, customFields) {
-    const url = getPublicUrl(linkOrToken, customFields);
+  function handleWhatsAppShare(linkOrToken) {
+    const url = getPublicUrl(linkOrToken);
     const message = `Student Registration Form\n${url}`;
     const shareUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
     window.open(shareUrl, "_blank", "noopener,noreferrer");
@@ -531,12 +520,13 @@ function RegistrationLinks() {
     if (search.trim()) {
       const q = search.toLowerCase();
       list = list.filter((l) => {
-        const publicUrl = `${window.location.origin}/register/${l.token}`.toLowerCase();
+        const shortUrl = getPublicUrl(l).toLowerCase();
+        const rawToken = (l.token || "").toLowerCase();
         const created = formatDate(l.created_at).toLowerCase();
         const fieldNames = Array.isArray(l.form_config)
           ? l.form_config.map((f) => f.name.toLowerCase()).join(" ")
           : "";
-        return publicUrl.includes(q) || created.includes(q) || fieldNames.includes(q);
+        return shortUrl.includes(q) || rawToken.includes(q) || created.includes(q) || fieldNames.includes(q);
       });
     }
 
@@ -769,7 +759,7 @@ function RegistrationLinks() {
             </svg>
             <input
               type="text"
-              placeholder="Search by link token, fields, or date…"
+              placeholder="Search by short URL, token, fields, or date…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -1186,7 +1176,7 @@ function RegistrationLinks() {
                 <p className="eyebrow">FORM CUSTOMIZATION</p>
                 <h2 id="form-builder-title">
                   {editingLink
-                    ? `Customize Form for Link (${editingLink.token.slice(0, 10)}…)`
+                    ? `Customize Form for Link (/r/${getShortCode(editingLink)})`
                     : "Customize Registration Form"}
                 </h2>
               </div>

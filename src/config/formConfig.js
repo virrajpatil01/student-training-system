@@ -9,6 +9,49 @@ export const DEFAULT_FORM_FIELDS = [
 export const SYS_FORM_PREFIX = "SYS_FORM_CFG::";
 
 /**
+ * Generates a clean, unique, URL-safe short token.
+ */
+export function createShortToken(length = 8) {
+  const byteCount = Math.ceil(length / 2);
+  const bytes = new Uint8Array(byteCount);
+  if (typeof window !== "undefined" && window.crypto) {
+    window.crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < byteCount; i++) {
+      bytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, length);
+}
+
+/**
+ * Extracts the short code for a registration link or token.
+ * If the link has an existing 64-character token, uses its 8-character prefix.
+ */
+export function getShortCode(linkOrToken) {
+  if (!linkOrToken) return "";
+  const token = typeof linkOrToken === "string" ? linkOrToken : (linkOrToken?.token || "");
+  if (!token) return "";
+  return token.length > 8 ? token.slice(0, 8) : token;
+}
+
+/**
+ * Builds the canonical short URL for a registration link.
+ * Does NOT append large encoded form configuration (?f=).
+ */
+export function getShortUrl(linkOrToken) {
+  const code = getShortCode(linkOrToken);
+  if (!code) return "";
+  const origin =
+    typeof window !== "undefined" && window.location?.origin
+      ? window.location.origin
+      : "";
+  return origin ? `${origin}/r/${code}` : `/r/${code}`;
+}
+
+/**
  * Checks whether a given role object or role_name string is an internal system config row.
  */
 export function isSystemRole(roleOrName) {
@@ -133,26 +176,36 @@ export function resolveFormConfig({
     return linkData.form_config;
   }
 
-  // 2. Supabase dynamic cloud record in roles table for this specific token
-  if (token && Array.isArray(rolesList) && rolesList.length > 0) {
-    const prefix = `${SYS_FORM_PREFIX}${token}::`;
-    const foundRole = rolesList.find(
-      (r) => r.role_name && r.role_name.startsWith(prefix)
+  // 2. Supabase dynamic cloud record in roles table for this token (or prefix)
+  const fullToken = linkData?.token || token || "";
+  const shortCode = fullToken.length > 8 ? fullToken.slice(0, 8) : fullToken;
+  if (Array.isArray(rolesList) && rolesList.length > 0 && (fullToken || shortCode)) {
+    const prefixes = [
+      fullToken ? `${SYS_FORM_PREFIX}${fullToken}::` : null,
+      shortCode ? `${SYS_FORM_PREFIX}${shortCode}::` : null,
+    ].filter(Boolean);
+
+    const foundRole = rolesList.find((r) =>
+      r.role_name && prefixes.some((pfx) => r.role_name.startsWith(pfx))
     );
+
     if (foundRole) {
       try {
-        const jsonStr = foundRole.role_name.slice(prefix.length);
-        const parsed = JSON.parse(jsonStr);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+        const separatorIdx = foundRole.role_name.indexOf("::", SYS_FORM_PREFIX.length);
+        if (separatorIdx !== -1) {
+          const jsonStr = foundRole.role_name.slice(separatorIdx + 2);
+          const parsed = JSON.parse(jsonStr);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            return parsed;
+          }
         }
       } catch (err) {
-        console.warn("Failed to parse cloud form config for token:", token, err);
+        console.warn("Failed to parse cloud form config:", err);
       }
     }
   }
 
-  // 3. Self-contained URL parameter
+  // 3. Self-contained URL parameter (backward compatibility)
   if (searchString) {
     const params = new URLSearchParams(searchString);
     const fromParam = params.get("f") || params.get("cfg");
@@ -165,13 +218,20 @@ export function resolveFormConfig({
   }
 
   // 4. Browser LocalStorage cache
-  if (token && typeof localStorage !== "undefined") {
+  if (typeof localStorage !== "undefined") {
     try {
-      const cached = localStorage.getItem(`reg_form_${token}`);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+      const keysToTry = [
+        fullToken ? `reg_form_${fullToken}` : null,
+        shortCode ? `reg_form_${shortCode}` : null,
+      ].filter(Boolean);
+
+      for (const k of keysToTry) {
+        const cached = localStorage.getItem(k);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            return parsed;
+          }
         }
       }
     } catch {
