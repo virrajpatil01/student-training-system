@@ -384,12 +384,29 @@ function Register() {
     }
     enrichedExtra._fieldLabels = fieldLabelMap;
 
+    // Extract normalized email for duplicate checking & direct column persistence
+    let normalizedEmail = (enrichedExtra.email || enrichedExtra["Email Address"] || "").trim().toLowerCase();
+    if (!normalizedEmail) {
+      for (const [_, v] of Object.entries(customValues)) {
+        if (typeof v === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim())) {
+          normalizedEmail = v.trim().toLowerCase();
+          break;
+        }
+      }
+    }
+    if (normalizedEmail) {
+      enrichedExtra.email = normalizedEmail;
+    }
+
     const payloadWithExtra = {
       name: normalizedName,
       role_id: roleId,
       registration_link_id: link.id,
       extra_fields: enrichedExtra,
     };
+    if (normalizedEmail) {
+      payloadWithExtra.email = normalizedEmail;
+    }
 
     console.log("========== STUDENT REGISTRATION SUBMIT ==========");
     console.log("Submitting payload:", payloadWithExtra);
@@ -398,6 +415,7 @@ function Register() {
     console.log("Role ID:", roleId);
     console.log("Custom Values:", customValues);
     console.log("Enriched Extra:", enrichedExtra);
+    console.log("Normalized Email:", normalizedEmail);
     console.log("================================================");
 
     let insertedStudent = null;
@@ -428,7 +446,7 @@ function Register() {
       let directRes = await supabase.from("students").insert(payloadWithExtra);
 
       if (directRes.error && isMissingColumnError(directRes.error)) {
-        console.warn("extra_fields column not present in students table, submitting with formatted name fallback.");
+        console.warn("extra_fields or email column not present in students table, submitting with formatted name fallback.");
         const extraEntries = Object.entries(customValues).filter(([_, v]) => v && String(v).trim());
         let compositeName = normalizedName;
         if (extraEntries.length > 0) {
@@ -481,6 +499,22 @@ function Register() {
       console.error("Error Details:", insertError.details);
       console.error("Error Hint:", insertError.hint);
       console.error("==========================================");
+
+      const msg = String(insertError.message || "");
+      const isEmailDuplicate =
+        insertError.code === "EMAIL_ALREADY_REGISTERED" ||
+        insertError.code === "23505" ||
+        msg.includes("This email address is already registered") ||
+        (msg.toLowerCase().includes("email") &&
+          (msg.toLowerCase().includes("already registered") ||
+           msg.toLowerCase().includes("unique") ||
+           msg.toLowerCase().includes("duplicate") ||
+           msg.toLowerCase().includes("idx_students_unique")));
+
+      if (isEmailDuplicate) {
+        setErrorMessage("This email address is already registered. Please use a different email address.");
+        return;
+      }
 
       const errorParts = [
         insertError.message ? `Error: ${insertError.message}` : "Registration failed.",

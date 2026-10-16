@@ -23,6 +23,18 @@ function formatDate(value) {
       }).format(date);
 }
 
+function isMissingColumnError(error) {
+  if (!error) return false;
+  return (
+    error.code === "PGRST204" ||
+    error.code === "42703" ||
+    (typeof error.message === "string" &&
+      (error.message.toLowerCase().includes("column") ||
+        error.message.toLowerCase().includes("schema cache") ||
+        error.message.toLowerCase().includes("does not exist")))
+  );
+}
+
 function Students() {
   const navigate = useNavigate();
   const [students, setStudents] = useState([]);
@@ -696,13 +708,18 @@ function Students() {
 
     try {
       const extra = {};
-      if (addStudentEmail.trim()) extra.email = addStudentEmail.trim();
-      if (addStudentPhone.trim()) extra.phone = addStudentPhone.trim();
+      const cleanEmail = addStudentEmail.trim().toLowerCase();
+      const cleanPhone = addStudentPhone.trim();
+      if (cleanEmail) extra.email = cleanEmail;
+      if (cleanPhone) extra.phone = cleanPhone;
 
       const studentRecord = {
         name: sName,
         role_id: addStudentRoleId,
       };
+      if (cleanEmail) {
+        studentRecord.email = cleanEmail;
+      }
       if (Object.keys(extra).length > 0) {
         studentRecord.extra_fields = extra;
       }
@@ -712,14 +729,21 @@ function Students() {
         const { data, error } = await supabase.from("students").insert(studentRecord).select().single();
         if (error) throw error;
         createdStudent = data;
-      } catch {
-        const { data, error } = await supabase
-          .from("students")
-          .insert({ name: sName, role_id: addStudentRoleId })
-          .select()
-          .single();
-        if (error) throw error;
-        createdStudent = data;
+      } catch (firstInsertErr) {
+        // If email column does not exist yet, fallback to inserting without direct email column
+        if (isMissingColumnError(firstInsertErr)) {
+          const fallbackRecord = { name: sName, role_id: addStudentRoleId };
+          if (Object.keys(extra).length > 0) fallbackRecord.extra_fields = extra;
+          const { data, error } = await supabase
+            .from("students")
+            .insert(fallbackRecord)
+            .select()
+            .single();
+          if (error) throw error;
+          createdStudent = data;
+        } else {
+          throw firstInsertErr;
+        }
       }
 
       // Auto-assign student via backend
@@ -744,7 +768,20 @@ function Students() {
       await loadStudents();
     } catch (err) {
       console.error("Error adding student:", err);
-      setAddStudentError(err.message || "Failed to add student.");
+      const msg = String(err.message || "");
+      if (
+        err.code === "23505" ||
+        msg.includes("This email address is already registered") ||
+        (msg.toLowerCase().includes("email") &&
+          (msg.toLowerCase().includes("already registered") ||
+           msg.toLowerCase().includes("unique") ||
+           msg.toLowerCase().includes("duplicate") ||
+           msg.toLowerCase().includes("idx_students_unique")))
+      ) {
+        setAddStudentError("This email address is already registered. Please use a different email address.");
+      } else {
+        setAddStudentError(err.message || "Failed to add student.");
+      }
     } finally {
       setAddStudentSaving(false);
     }

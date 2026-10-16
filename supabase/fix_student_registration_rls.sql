@@ -121,6 +121,7 @@ DECLARE
   v_clean_name text := trim(COALESCE(p_name, ''));
   v_has_extra_col boolean;
   v_composite_name text;
+  v_clean_email text := '';
   v_duplicate_exists boolean;
 BEGIN
   -- A. Validate registration token input
@@ -194,23 +195,51 @@ BEGIN
     );
   END IF;
 
-  -- E. Duplicate registration check (prevent submitting the exact same student name and course twice on the same link)
-  SELECT EXISTS (
-    SELECT 1 FROM public.students
-    WHERE lower(name) = lower(v_clean_name)
-      AND role_id = p_role_id
-      AND registration_link_id = v_link.id
-  ) INTO v_duplicate_exists;
+  -- E. Extract and normalize email address (case-insensitive & trimmed)
+  v_clean_email := lower(trim(COALESCE(
+    p_extra_fields->>'email',
+    p_extra_fields->>'Email',
+    p_extra_fields->>'email_address',
+    p_extra_fields->>'Email Address',
+    (
+      SELECT kv.value
+      FROM jsonb_each_text(COALESCE(p_extra_fields, '{}'::jsonb)) kv
+      WHERE kv.value ~* '^[^\s@]+@[^\s@]+\.[^\s@]+$'
+      LIMIT 1
+    ),
+    ''
+  )));
 
-  IF v_duplicate_exists THEN
-    RETURN jsonb_build_object(
-      'success', false,
-      'code', 'DUPLICATE_REGISTRATION',
-      'error', 'A student with this name is already registered for this course.'
-    );
+  -- F. Concurrency Protection & Email Uniqueness Check
+  -- Advisory transaction lock prevents concurrent requests from registering the exact same email simultaneously
+  IF v_clean_email <> '' THEN
+    PERFORM pg_advisory_xact_lock(hashtext(v_clean_email));
+
+    SELECT EXISTS (
+      SELECT 1 FROM public.students
+      WHERE (
+        lower(trim(COALESCE(email, ''))) = v_clean_email
+        OR lower(trim(COALESCE(extra_fields->>'email', ''))) = v_clean_email
+        OR lower(trim(COALESCE(extra_fields->>'Email', ''))) = v_clean_email
+        OR lower(trim(COALESCE(extra_fields->>'email_address', ''))) = v_clean_email
+        OR lower(trim(COALESCE(extra_fields->>'Email Address', ''))) = v_clean_email
+        OR EXISTS (
+          SELECT 1 FROM jsonb_each_text(COALESCE(extra_fields, '{}'::jsonb)) kv
+          WHERE lower(trim(kv.value)) = v_clean_email
+        )
+      )
+    ) INTO v_duplicate_exists;
+
+    IF v_duplicate_exists THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'code', 'EMAIL_ALREADY_REGISTERED',
+        'error', 'This email address is already registered. Please use a different email address.'
+      );
+    END IF;
   END IF;
 
-  -- F. Insert student record into public.students
+  -- G. Check column availability in public.students
   SELECT EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_schema = 'public'
@@ -218,26 +247,35 @@ BEGIN
       AND column_name = 'extra_fields'
   ) INTO v_has_extra_col;
 
-  IF v_has_extra_col THEN
-    INSERT INTO public.students (name, role_id, registration_link_id, extra_fields)
-    VALUES (v_clean_name, p_role_id, v_link.id, COALESCE(p_extra_fields, '{}'::jsonb))
-    RETURNING id INTO v_student_id;
-  ELSE
-    -- If extra_fields column is not yet present, build composite name fallback
-    IF p_extra_fields IS NOT NULL AND p_extra_fields <> '{}'::jsonb THEN
-      v_composite_name := v_clean_name || ' (' || (
-        SELECT string_agg(key || ': ' || (value #>> '{}'), ' | ')
-        FROM jsonb_each(p_extra_fields)
-        WHERE value #>> '{}' <> ''
-      ) || ')';
+  -- H. Insert student record into public.students
+  BEGIN
+    IF v_has_extra_col THEN
+      INSERT INTO public.students (name, role_id, registration_link_id, extra_fields)
+      VALUES (v_clean_name, p_role_id, v_link.id, COALESCE(p_extra_fields, '{}'::jsonb))
+      RETURNING id INTO v_student_id;
     ELSE
-      v_composite_name := v_clean_name;
-    END IF;
+      -- If extra_fields column is not yet present, build composite name fallback
+      IF p_extra_fields IS NOT NULL AND p_extra_fields <> '{}'::jsonb THEN
+        v_composite_name := v_clean_name || ' (' || (
+          SELECT string_agg(key || ': ' || (value #>> '{}'), ' | ')
+          FROM jsonb_each(p_extra_fields)
+          WHERE value #>> '{}' <> ''
+        ) || ')';
+      ELSE
+        v_composite_name := v_clean_name;
+      END IF;
 
-    INSERT INTO public.students (name, role_id, registration_link_id)
-    VALUES (v_composite_name, p_role_id, v_link.id)
-    RETURNING id INTO v_student_id;
-  END IF;
+      INSERT INTO public.students (name, role_id, registration_link_id)
+      VALUES (v_composite_name, p_role_id, v_link.id)
+      RETURNING id INTO v_student_id;
+    END IF;
+  EXCEPTION WHEN unique_violation THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'code', 'EMAIL_ALREADY_REGISTERED',
+      'error', 'This email address is already registered. Please use a different email address.'
+    );
+  END;
 
   -- G. Return success payload with newly generated student_id and confirmed role_id
   RETURN jsonb_build_object(
