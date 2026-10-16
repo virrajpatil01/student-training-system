@@ -29,30 +29,12 @@ export function isBatchEligible(batch) {
   return status !== "cancelled";
 }
 
-/**
- * Contact extraction helper.
- */
-export function extractContact(student) {
-  if (!student) return { email: "—", phone: "—" };
-  const email =
-    student.email ||
-    student.extra_fields?.email ||
-    student.extra_fields?.Email ||
-    student.extra_fields?.["email_address"] ||
-    "—";
-
-  const phone =
-    student.phone ||
-    student.extra_fields?.phone ||
-    student.extra_fields?.Phone ||
-    student.extra_fields?.contact ||
-    student.extra_fields?.["phone_number"] ||
-    student.extra_fields?.mobile ||
-    student.extra_fields?.Mobile ||
-    "—";
-
-  return { email, phone };
-}
+import {
+  extractContact,
+  extractStudentDetails,
+  buildGlobalFormConfigMap,
+} from "./studentDetails.js";
+export { extractContact, extractStudentDetails, buildGlobalFormConfigMap };
 
 /**
  * Computes canonical metrics according to system definitions:
@@ -212,7 +194,7 @@ export function computeMetrics({
  * and computes consistent system metrics.
  */
 export async function fetchSystemMetrics() {
-  const [students, roles, trainers, batches, assignments] = await Promise.all([
+  const [students, roles, trainers, batches, assignments, linksRes] = await Promise.all([
     fetchAllRows(() =>
       supabase
         .from("students")
@@ -237,14 +219,19 @@ export async function fetchSystemMetrics() {
     fetchAllRows(() =>
       supabase.from("batch_students").select("id, batch_id, student_id")
     ),
+    supabase.from("registration_links").select("id, token, form_config"),
   ]);
 
   const cleanRoles = filterSystemRoles(roles);
+  const formConfigMap = buildGlobalFormConfigMap(roles, linksRes?.data || []);
   const metrics = computeMetrics({ students, batches, assignments, trainers, roles: cleanRoles });
 
   return {
     students,
     roles: cleanRoles,
+    rawRoles: roles,
+    registrationLinks: linksRes?.data || [],
+    formConfigMap,
     trainers,
     batches,
     assignments,

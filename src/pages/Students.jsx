@@ -5,6 +5,11 @@ import { supabase } from "../supabase";
 import { fetchAllRows } from "../utils/studentMetrics";
 import { getApiUrl } from "../config/api";
 import { filterSystemRoles } from "../config/formConfig";
+import {
+  extractStudentDetails,
+  extractContact,
+  buildGlobalFormConfigMap,
+} from "../utils/studentDetails";
 
 function formatDate(value) {
   if (!value) return "—";
@@ -16,46 +21,6 @@ function formatDate(value) {
         month: "short",
         day: "numeric",
       }).format(date);
-}
-
-function extractContact(student) {
-  let email =
-    student.email ||
-    student.extra_fields?.email ||
-    student.extra_fields?.Email ||
-    student.extra_fields?.["email_address"] ||
-    "";
-
-  let phone =
-    student.phone ||
-    student.extra_fields?.phone ||
-    student.extra_fields?.Phone ||
-    student.extra_fields?.contact ||
-    student.extra_fields?.["phone_number"] ||
-    student.extra_fields?.mobile ||
-    "";
-
-  let cleanName = student.name || "Unnamed Student";
-
-  // If email or phone missing, check if formatted into name string
-  if ((!email || !phone) && typeof student.name === "string" && student.name.includes("(")) {
-    const match = student.name.match(/^(.*?)\s*\((.*?)\)$/);
-    if (match) {
-      cleanName = match[1].trim();
-      const details = match[2];
-      const parts = details.split("|").map((p) => p.trim());
-      for (const part of parts) {
-        const lower = part.toLowerCase();
-        if (!email && (lower.includes("email") || lower.includes("@"))) {
-          email = part.replace(/^email\s*(address)?\s*:\s*/i, "").trim();
-        } else if (!phone && (lower.includes("phone") || lower.includes("contact") || lower.includes("mobile") || /^\+?[\d\s-]{7,15}$/.test(part))) {
-          phone = part.replace(/^phone\s*(number)?\s*:\s*/i, "").trim();
-        }
-      }
-    }
-  }
-
-  return { email: email || "—", phone: phone || "—", cleanName };
 }
 
 function Students() {
@@ -117,7 +82,7 @@ function Students() {
     setLoadError("");
 
     try {
-      const [rawStudents, rolesRes, assignmentsList, batchesRes] = await Promise.all([
+      const [rawStudents, rolesRes, assignmentsList, batchesRes, linksRes] = await Promise.all([
         fetchAllRows(() =>
           supabase
             .from("students")
@@ -127,12 +92,17 @@ function Students() {
         supabase.from("roles").select("id, role_name").order("role_name", { ascending: true }),
         fetchAllRows(() => supabase.from("batch_students").select("id, batch_id, student_id")),
         supabase.from("batches").select("id, batch_name"),
+        supabase.from("registration_links").select("id, token, form_config"),
       ]);
 
       if (rolesRes.error) throw rolesRes.error;
 
       const rolesList = filterSystemRoles(rolesRes.data || []);
       const batchesList = batchesRes.data || [];
+      const linksList = linksRes?.data || [];
+
+      // Build unified dynamic form config dictionary across all links and system roles
+      const formConfigMap = buildGlobalFormConfigMap(rolesRes.data || [], linksList);
 
       // Map batch assignments
       const batchesMap = new Map(batchesList.map((b) => [String(b.id), b.batch_name]));
@@ -152,7 +122,7 @@ function Students() {
       const rolesMap = new Map(rolesList.map((r) => [String(r.id), r.role_name]));
 
       const enrichedStudents = rawStudents.map((s) => {
-        const { email, phone, cleanName } = extractContact(s);
+        const details = extractStudentDetails(s, formConfigMap);
         const roleName = Array.isArray(s.role)
           ? s.role[0]?.role_name || rolesMap.get(String(s.role_id)) || "—"
           : s?.role?.role_name || rolesMap.get(String(s.role_id)) || "—";
@@ -162,14 +132,17 @@ function Students() {
 
         return {
           id: s.id,
-          name: cleanName || s.name || "Unnamed Student",
-          email,
-          phone,
+          name: details.cleanName || s.name || "Unnamed Student",
+          email: details.email,
+          phone: details.phone,
+          customDetails: details.customDetails || [],
+          extraFields: details.extraFields || {},
           roleId: s.role_id,
           roleName,
           createdAt: s.created_at,
           batchName: batchName || null,
           isAssigned,
+          raw: s,
         };
       });
 
@@ -218,7 +191,12 @@ function Students() {
           s.name.toLowerCase().includes(q) ||
           s.email.toLowerCase().includes(q) ||
           s.phone.toLowerCase().includes(q) ||
-          s.roleName.toLowerCase().includes(q)
+          s.roleName.toLowerCase().includes(q) ||
+          (s.customDetails || []).some(
+            (d) =>
+              (d.value && d.value.toLowerCase().includes(q)) ||
+              (d.label && d.label.toLowerCase().includes(q))
+          )
       );
     }
 
@@ -1283,23 +1261,23 @@ function Students() {
               </button>
             </div>
 
-            <dl className="student-details-list" style={{ padding: "0 24px 20px" }}>
+            <dl className="student-details-list" style={{ padding: "0 24px 20px", maxHeight: "65vh", overflowY: "auto" }}>
               <div>
                 <dt>Full Name</dt>
-                <dd>{selectedStudent.name}</dd>
+                <dd>{selectedStudent.name || "—"}</dd>
               </div>
               <div>
                 <dt>Email</dt>
-                <dd>{selectedStudent.email}</dd>
+                <dd>{selectedStudent.email || "—"}</dd>
               </div>
               <div>
                 <dt>Phone</dt>
-                <dd>{selectedStudent.phone}</dd>
+                <dd>{selectedStudent.phone || "—"}</dd>
               </div>
               <div>
                 <dt>Enrolled Course</dt>
                 <dd>
-                  <span className="field-tag">{selectedStudent.roleName}</span>
+                  <span className="field-tag">{selectedStudent.roleName || "—"}</span>
                 </dd>
               </div>
               <div>
@@ -1322,6 +1300,38 @@ function Students() {
                 <dt>Registration Date</dt>
                 <dd>{formatDate(selectedStudent.createdAt)}</dd>
               </div>
+
+              {selectedStudent.customDetails && selectedStudent.customDetails.length > 0 && (
+                <>
+                  <div
+                    style={{
+                      display: "block",
+                      gridColumn: "1 / -1",
+                      padding: "16px 0 6px",
+                      borderBottom: "1px solid #e2e8f0",
+                      marginTop: "6px",
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: "11px",
+                        fontWeight: "700",
+                        letterSpacing: "0.08em",
+                        textTransform: "uppercase",
+                        color: "#6366f1",
+                      }}
+                    >
+                      Additional Details
+                    </span>
+                  </div>
+                  {selectedStudent.customDetails.map((detail, idx) => (
+                    <div key={detail.id || `custom-${idx}`}>
+                      <dt>{detail.label}</dt>
+                      <dd>{detail.value || "—"}</dd>
+                    </div>
+                  ))}
+                </>
+              )}
             </dl>
 
             <div className="management-modal-actions">

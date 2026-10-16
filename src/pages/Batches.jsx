@@ -4,6 +4,7 @@ import { supabase } from "../supabase";
 import { computeMetrics, fetchAllRows } from "../utils/studentMetrics";
 import { getApiUrl, BACKEND_URL } from "../config/api";
 import { filterSystemRoles } from "../config/formConfig";
+import { extractContact } from "../utils/studentDetails";
 
 function formatDate(value) {
   if (!value) return "—";
@@ -100,26 +101,7 @@ function normalizeStatus(value) {
   return STATUS_UPCOMING;
 }
 
-function extractContact(student) {
-  const email =
-    student.email ||
-    student.extra_fields?.email ||
-    student.extra_fields?.Email ||
-    student.extra_fields?.["email_address"] ||
-    "—";
 
-  const phone =
-    student.phone ||
-    student.extra_fields?.phone ||
-    student.extra_fields?.Phone ||
-    student.extra_fields?.contact ||
-    student.extra_fields?.["phone_number"] ||
-    student.extra_fields?.mobile ||
-    student.extra_fields?.Mobile ||
-    "—";
-
-  return { email, phone };
-}
 
 async function fetchBatchesData() {
   const {

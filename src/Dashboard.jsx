@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "./supabase";
-import { fetchSystemMetrics, extractContact } from "./utils/studentMetrics";
+import {
+  fetchSystemMetrics,
+  extractContact,
+  extractStudentDetails,
+} from "./utils/studentMetrics";
 
 const currentDate = new Intl.DateTimeFormat(undefined, {
   weekday: "short",
@@ -50,13 +54,14 @@ function Dashboard() {
         trainers: allTrainers,
         batches: allBatches,
         metrics,
+        formConfigMap,
       } = await fetchSystemMetrics();
 
       const batchesMap = new Map(allBatches.map((b) => [String(b.id), b.batch_name]));
 
       // Enrich recent students (most recent 8 registered students)
       const enrichedStudents = allStudents.slice(0, 8).map((s) => {
-        const { email, phone } = extractContact(s);
+        const details = extractStudentDetails(s, formConfigMap);
         const roleName = Array.isArray(s.role)
           ? s.role[0]?.role_name || "—"
           : s?.role?.role_name || "—";
@@ -67,13 +72,16 @@ function Dashboard() {
 
         return {
           id: s.id,
-          name: s.name || "Unnamed Student",
-          email,
-          phone,
+          name: details.cleanName || s.name || "Unnamed Student",
+          email: details.email,
+          phone: details.phone,
+          customDetails: details.customDetails || [],
+          extraFields: details.extraFields || {},
           roleName,
           createdAt: s.created_at,
           batchName: batchName || null,
           isAssigned: Boolean(batchName),
+          raw: s,
         };
       });
 
@@ -493,23 +501,23 @@ function Dashboard() {
               </button>
             </div>
 
-            <dl className="student-details-list" style={{ padding: "0 24px 20px" }}>
+            <dl className="student-details-list" style={{ padding: "0 24px 20px", maxHeight: "65vh", overflowY: "auto" }}>
               <div>
                 <dt>Full Name</dt>
-                <dd>{selectedStudent.name}</dd>
+                <dd>{selectedStudent.name || "—"}</dd>
               </div>
               <div>
                 <dt>Email</dt>
-                <dd>{selectedStudent.email}</dd>
+                <dd>{selectedStudent.email || "—"}</dd>
               </div>
               <div>
                 <dt>Phone</dt>
-                <dd>{selectedStudent.phone}</dd>
+                <dd>{selectedStudent.phone || "—"}</dd>
               </div>
               <div>
                 <dt>Course</dt>
                 <dd>
-                  <span className="field-tag">{selectedStudent.roleName}</span>
+                  <span className="field-tag">{selectedStudent.roleName || "—"}</span>
                 </dd>
               </div>
               <div>
@@ -532,6 +540,38 @@ function Dashboard() {
                 <dt>Registration Date</dt>
                 <dd>{formatDate(selectedStudent.createdAt)}</dd>
               </div>
+
+              {selectedStudent.customDetails && selectedStudent.customDetails.length > 0 && (
+                <>
+                  <div
+                    style={{
+                      display: "block",
+                      gridColumn: "1 / -1",
+                      padding: "16px 0 6px",
+                      borderBottom: "1px solid #e2e8f0",
+                      marginTop: "6px",
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: "11px",
+                        fontWeight: "700",
+                        letterSpacing: "0.08em",
+                        textTransform: "uppercase",
+                        color: "#6366f1",
+                      }}
+                    >
+                      Additional Details
+                    </span>
+                  </div>
+                  {selectedStudent.customDetails.map((detail, idx) => (
+                    <div key={detail.id || `custom-${idx}`}>
+                      <dt>{detail.label}</dt>
+                      <dd>{detail.value || "—"}</dd>
+                    </div>
+                  ))}
+                </>
+              )}
             </dl>
 
             <div className="management-modal-actions">

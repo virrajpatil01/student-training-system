@@ -336,11 +336,59 @@ function Register() {
       return;
     }
 
+    // Build comprehensive, self-describing extra_fields preserving dynamic IDs, labels, and standard aliases
+    const enrichedExtra = { ...customValues };
+    const fieldLabelMap = {};
+
+    for (const field of formConfig) {
+      if (field.isDefault) continue;
+      const rawVal = customValues[field.id];
+      const val = typeof rawVal === "string" ? rawVal.trim() : rawVal;
+      if (val !== undefined && val !== null && val !== "") {
+        fieldLabelMap[field.id] = field.name;
+        // Save under human-readable field label
+        if (field.name) {
+          enrichedExtra[field.name] = val;
+        }
+        // Save standard canonical aliases for maximum compatibility
+        const lowerName = (field.name || "").toLowerCase();
+        if (field.type === "email" || lowerName.includes("email")) {
+          enrichedExtra.email = val;
+          enrichedExtra.email_address = val;
+        }
+        if (field.type === "tel" || lowerName.includes("phone") || lowerName.includes("mobile") || lowerName.includes("contact")) {
+          enrichedExtra.phone = val;
+          enrichedExtra.phone_number = val;
+        }
+        if (lowerName.includes("college") || lowerName.includes("university")) {
+          enrichedExtra.college = val;
+          enrichedExtra["College / University"] = val;
+        }
+        if (lowerName.includes("age")) {
+          enrichedExtra.age = val;
+          enrichedExtra.Age = val;
+        }
+        if (lowerName.includes("gender")) {
+          enrichedExtra.gender = val;
+          enrichedExtra.Gender = val;
+        }
+        if (lowerName.includes("qualification")) {
+          enrichedExtra.qualification = val;
+          enrichedExtra["Highest Qualification"] = val;
+        }
+        if (lowerName.includes("village")) {
+          enrichedExtra.village = val;
+          enrichedExtra["Village Name"] = val;
+        }
+      }
+    }
+    enrichedExtra._fieldLabels = fieldLabelMap;
+
     const payloadWithExtra = {
       name: normalizedName,
       role_id: roleId,
       registration_link_id: link.id,
-      extra_fields: customValues,
+      extra_fields: enrichedExtra,
     };
 
     console.log("========== STUDENT REGISTRATION SUBMIT ==========");
@@ -349,6 +397,7 @@ function Register() {
     console.log("Link ID:", link?.id);
     console.log("Role ID:", roleId);
     console.log("Custom Values:", customValues);
+    console.log("Enriched Extra:", enrichedExtra);
     console.log("================================================");
 
     let insertedStudent = null;
@@ -359,7 +408,7 @@ function Register() {
       p_token: link.token,
       p_name: normalizedName,
       p_role_id: roleId,
-      p_extra_fields: customValues,
+      p_extra_fields: enrichedExtra,
     });
 
     if (!rpcError && rpcResult) {
@@ -375,13 +424,6 @@ function Register() {
       // 2. Fallback to direct insert if RPC is not deployed yet or encountered an error
       // IMPORTANT: Do NOT chain .select() on public/anon insert to avoid Code 42501 (SELECT policy restricted to authenticated)
       console.warn("RPC register_student unavailable, attempting direct insert fallback:", rpcError?.message);
-
-      const payloadWithExtra = {
-        name: normalizedName,
-        role_id: roleId,
-        registration_link_id: link.id,
-        extra_fields: customValues,
-      };
 
       let directRes = await supabase.from("students").insert(payloadWithExtra);
 
